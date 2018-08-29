@@ -27,7 +27,7 @@ public class MainActivity extends Activity {
     static {
         System.loadLibrary("usb_android");
         System.loadLibrary("royale");
-        System.loadLibrary("mainNative");
+        System.loadLibrary("nativelib");
     }
 
     private PendingIntent mUsbPi;
@@ -47,10 +47,9 @@ public class MainActivity extends Activity {
     int[] resolution;
 
     public native int[] OpenCameraNative(int fd, int vid, int pid);
-
     public native void CloseCameraNative();
-
     public native void RegisterCallback();
+    public native void DetectBackgroundNative();
 
     //broadcast receiver for user usb permission dialog
     private final BroadcastReceiver mUsbReceiver = new BroadcastReceiver() {
@@ -108,6 +107,12 @@ public class MainActivity extends Activity {
             @Override
             public void onClick(View view) {
                 openCamera();
+            }
+        });
+        findViewById(R.id.buttonBackGr).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                DetectBackgroundNative();
             }
         });
     }

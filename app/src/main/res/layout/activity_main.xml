@@ -24,4 +24,23 @@
         android:alpha="0.5"
         android:text="Camera" />
 
+    <Button
+        android:id="@+id/buttonBackGr"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_above="@+id/buttonCamera"
+        android:layout_alignParentEnd="true"
+        android:layout_alignParentRight="true"
+        android:alpha="0.5"
+        android:text="Backgr" />
+
+    <TextView
+        android:id="@+id/textViewInfo"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignParentRight="true"
+        android:layout_alignParentTop="true"
+        android:textColor="@color/colorAccent"
+        android:text="Detect background" />
+
 </RelativeLayout>
