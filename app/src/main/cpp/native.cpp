@@ -7,6 +7,7 @@
 #include <chrono>
 #include <mutex>
 #include "opencv2/opencv.hpp"
+#include <Shape.h>
 
 #ifdef __cplusplus
 extern "C"
@@ -21,10 +22,11 @@ using namespace std;
 using namespace cv;
 
 JavaVM *m_vm;
-jmethodID m_amplitudeCallbackID;
+jmethodID m_amplitudeCallbackID, m_shapeDetectedCallbackID;
 jobject m_obj;
 
 uint16_t width, height;
+int mode = 1; // 1 camera, 2 test
 
 // this represents the main camera device object
 static std::unique_ptr<ICameraDevice> cameraDevice;
@@ -35,8 +37,8 @@ class MyListener : public IDepthDataListener
     Mat zImage, zImage8;
 
     mutex flagMutex;
-    bool detection = false;
-    bool backgr = false;
+    bool detecting = false;
+    bool detected = false;
     int count = 0;
     Mat backgrMat;
     Mat diff, diffBin;
@@ -44,17 +46,17 @@ class MyListener : public IDepthDataListener
 
     void onNewData (const DepthData *data)
     {
-        if(detection){
+        if(detecting){
             zImage = Scalar::all (0);
         }
         else{
             zImage = backgrMat.clone();
         }
-        int k = 0;
+        int k = zImage.rows * zImage.cols -1 ; // to reverse scrren
         for (int y = 0; y < zImage.rows; y++)
         {
             float *zRowPtr = zImage.ptr<float> (y);
-            for (int x = 0; x < zImage.cols; x++, k++)
+            for (int x = 0; x < zImage.cols; x++, k--)
             {
                 auto curPoint = data->points.at (k);
                 if (curPoint.depthConfidence > 0)
@@ -65,82 +67,68 @@ class MyListener : public IDepthDataListener
         }
 
         //Background profile
-        if(detection){
+        if(detecting){
             backgrMat += zImage;
             count++;
             if(count == 20){
                 backgrMat /= 20;
-                detection = false;
-                backgr = true;
-                LOGI("Background detection has ended.");
+                detecting = false;
+                detected = true;
+                LOGI("Background detecting has ended.");
             }
         }
 
-        else if (backgr){
+        else if (detected){
             diff = backgrMat - zImage;
             Mat temp = diff.clone();
             undistort (temp, diff, cameraMatrix, distortionCoefficients);
 
+            boxFilter(diff, diff, -1, Size(5,5));
             threshold(diff, diffBin, 0.005, 255, CV_THRESH_BINARY);
             // Find contours
             diffBin.convertTo(diffBin, CV_8UC1);
             vector<vector<Point> > contours;
-            findContours(diffBin, contours, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE, Point(0, 0));
+            findContours(diffBin, contours, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_SIMPLE, Point(0, 0));
 
-            drawing = Scalar::all (0);
+            if(mode == 1) drawing = Scalar::all (0);
             for( unsigned int i = 0; i< contours.size(); i++ )
             {
-                if(contourArea(contours[i]) < 100) continue;
-                drawContours( drawing, contours, i, Scalar(255,0,0),2, 8);
-                auto epsilon = 0.04*arcLength(contours[i],true);
-                vector<Point> approx;
-                approxPolyDP(contours[i], approx, epsilon, true);
-                for( unsigned int j = 0; j< approx.size(); j++ )
-                {
-                    circle( drawing, approx[j], 3, Scalar(0,255,0), -1, 8, 0 );
+                Shape s = Shape(contours[i]);
+                auto center = s.getCenter();
+                if(center.x < width*0.1 || center.x > width*0.9 ||
+                   center.y < height*0.1 || center.y > height*0.9){
+                    s.isValidShape = false;
+                }
+                if(mode == 1) s.draw(drawing);
+            }
+        }
+
+        if(mode == 1) {
+            // fill a temp structure to use to populate the java int array
+            //  int color = (A & 0xff) << 24 | (R & 0xff) << 16 | (G & 0xff) << 8 | (B & 0xff);
+            jint fill[width * height];
+            k = 0;
+            for (int i = 0; i < drawing.rows; i++) {
+                Vec3b *ptr = drawing.ptr<Vec3b>(i);
+                for (int j = 0; j < drawing.cols; j++) {
+                    Vec3b p = ptr[j];
+                    int color = (255 & 0xff) << 24 | (p[2] & 0xff) << 16 | (p[1] & 0xff) << 8 |
+                                (p[0] & 0xff);
+                    fill[k] = color;
+                    k++;
                 }
             }
+            // attach to the JavaVM thread and get a JNI interface pointer
+            JNIEnv *env;
+            m_vm->AttachCurrentThread((JNIEnv **) &env, NULL);
+            jintArray intArray = env->NewIntArray(width * height);
+            env->SetIntArrayRegion(intArray, 0, width * height, fill);
+            env->CallVoidMethod(m_obj, m_amplitudeCallbackID, intArray);
+            m_vm->DetachCurrentThread();
         }
+        else if(mode == 2){
 
-        // fill a temp structure to use to populate the java int array
-        //  int color = (A & 0xff) << 24 | (R & 0xff) << 16 | (G & 0xff) << 8 | (B & 0xff);
-        jint fill[width * height];
-        k=0;
-        for ( int i=0; i<drawing.rows; i++ ) {
-            Vec3b *ptr = drawing.ptr<Vec3b>(i);
-            for ( int j=0; j<drawing.cols; j++ ) {
-                Vec3b p = ptr[j];
-                int color = (255 & 0xff) << 24 | (p[2] & 0xff) << 16 | (p[1] & 0xff) << 8 | (p[0] & 0xff);
-                fill[k]  = color;
-                k++;
-            }
         }
-
-        /*int i;
-        int max = 0;
-        int min = 65535;
-        for (i = 0; i < width * height; i++)
-        {
-            if (data->points.at (i).grayValue < min) min = data->points.at (i).grayValue;
-            if (data->points.at (i).grayValue > max) max = data->points.at (i).grayValue;
-        }
-        int span = max - min;
-        if (!span) span = 1;
-
-        jint fill[width * height];
-        for (i = 0; i < width * height; i++)
-        {
-            fill[i] = (int) ( ( (data->points.at (i).grayValue - min) / (float) span) * 255.0f);
-            fill[i] = fill[i] | fill[i] << 8 | fill[i] << 16 | 255 << 24;
-        } */
-
-        // attach to the JavaVM thread and get a JNI interface pointer
-        JNIEnv *env;
-        m_vm->AttachCurrentThread ( (JNIEnv **) &env, NULL);
-        jintArray intArray = env->NewIntArray (width * height);
-        env->SetIntArrayRegion (intArray, 0, width * height, fill);
-        env->CallVoidMethod (m_obj, m_amplitudeCallbackID, intArray);
-        m_vm->DetachCurrentThread();
 
     }
 
@@ -180,9 +168,9 @@ public :
     }
 
     void detectBackground(){
-        LOGI("Background detection has started.");
-        detection = true;
-        backgr = false;
+        LOGI("Background detecting has started.");
+        detecting = true;
+        detected = false;
         count = 0;
         backgrMat = Scalar::all (0);
         drawing = Scalar::all (0);
@@ -341,6 +329,7 @@ void Java_com_esalman17_shapedetector_MainActivity_RegisterCallback (JNIEnv *env
 
     // save method ID to call the method later in the listener
     m_amplitudeCallbackID = env->GetMethodID (g_class, "amplitudeCallback", "([I)V");
+    m_shapeDetectedCallbackID = env->GetMethodID (g_class, "shapeDetectedCallback", "([I)V");
 }
 
 void Java_com_esalman17_shapedetector_MainActivity_DetectBackgroundNative (JNIEnv *env, jobject thiz)
@@ -351,6 +340,11 @@ void Java_com_esalman17_shapedetector_MainActivity_DetectBackgroundNative (JNIEn
 void Java_com_esalman17_shapedetector_MainActivity_CloseCameraNative (JNIEnv *env, jobject thiz)
 {
     cameraDevice->stopCapture();
+}
+
+void Java_com_esalman17_shapedetector_MainActivity_ChangeModeNative (JNIEnv *env, jobject thiz, jint m)
+{
+    mode = m;
 }
 
 #ifdef __cplusplus

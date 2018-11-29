@@ -15,7 +15,7 @@ include_directories(C:/opencv_androidSDK/OpenCV-android-sdk/sdk/native/jni/inclu
 # set the path to the royale libraries
 link_directories( "${CMAKE_CURRENT_SOURCE_DIR}/src/main/jniLibs/${ANDROID_ABI}" )
 
-add_library( nativelib SHARED src/main/cpp/native.cpp )
+add_library( nativelib SHARED src/main/cpp/native.cpp src/main/cpp/Shape.cpp )
 
 # set the target library to build and it's dependencies to be linked and compiled
 target_link_libraries( nativelib

@@ -22,6 +22,11 @@ import android.view.Display;
 import java.util.HashMap;
 import java.util.Iterator;
 
+enum Mode{
+    CAMERA,
+    TEST,
+}
+
 public class MainActivity extends Activity {
 
     static {
@@ -34,22 +39,25 @@ public class MainActivity extends Activity {
     private UsbManager manager;
     private UsbDeviceConnection usbConnection;
 
-    private Bitmap bmp = null;
+    private Bitmap bmpCam = null;
+    private Bitmap bmpTest = null;
     private ImageView mainImView;
 
     boolean m_opened;
+    Mode currentMode;
 
     private static final String LOG_TAG = "MainActivity";
-
     private static final String ACTION_USB_PERMISSION = "ACTION_ROYALE_USB_PERMISSION";
 
     int scaleFactor;
     int[] resolution;
+    Point displaySize, camRes;
 
     public native int[] OpenCameraNative(int fd, int vid, int pid);
     public native void CloseCameraNative();
     public native void RegisterCallback();
     public native void DetectBackgroundNative();
+    public native void ChangeModeNative(int mode);
 
     //broadcast receiver for user usb permission dialog
     private final BroadcastReceiver mUsbReceiver = new BroadcastReceiver() {
@@ -107,12 +115,28 @@ public class MainActivity extends Activity {
             @Override
             public void onClick(View view) {
                 openCamera();
+                ChangeModeNative(1);
+                currentMode = Mode.CAMERA;
             }
         });
         findViewById(R.id.buttonBackGr).setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
+                if (!m_opened) {
+                    openCamera();
+                }
+                if(currentMode == null){
+                    ChangeModeNative(1);
+                    currentMode = Mode.CAMERA;
+                }
                 DetectBackgroundNative();
+            }
+        });
+        findViewById(R.id.buttonTest).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                ChangeModeNative(2);
+                currentMode = Mode.TEST;
             }
         });
     }
@@ -145,22 +169,6 @@ public class MainActivity extends Activity {
         }
 
         super.onDestroy();
-    }
-
-    public void amplitudeCallback(int[] amplitudes) {
-        if (!m_opened)
-        {
-            Log.d(LOG_TAG, "Device in Java not initialized");
-            return;
-        }
-        bmp.setPixels(amplitudes, 0, resolution[0], 0, 0, resolution[0], resolution[1]);
-
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                mainImView.setImageBitmap(bmp);
-            }
-        });
     }
 
     public void openCamera() {
@@ -212,6 +220,7 @@ public class MainActivity extends Activity {
         int fd = usbConnection.getFileDescriptor();
 
         resolution = OpenCameraNative(fd, device.getVendorId(), device.getProductId());
+        camRes = new Point(resolution[0], resolution[1]);
 
         if (resolution[0] > 0) {
             m_opened = true;
@@ -227,10 +236,68 @@ public class MainActivity extends Activity {
         double displayWidth = size.x * 0.9;
         scaleFactor = (int) displayWidth / resolution[0];
 
-        if (bmp == null) {
-            bmp = Bitmap.createBitmap(resolution[0], resolution[1],
-                    Bitmap.Config.ARGB_8888);
+        if (bmpCam == null) {
+            bmpCam = Bitmap.createBitmap(resolution[0], resolution[1], Bitmap.Config.ARGB_8888);
         }
     }
+
+    public void amplitudeCallback(int[] amplitudes) {
+        if (!m_opened)
+        {
+            Log.d(LOG_TAG, "Device in Java not initialized");
+            return;
+        }
+        bmpCam.setPixels(amplitudes, 0, resolution[0], 0, 0, resolution[0], resolution[1]);
+
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                mainImView.setImageBitmap(bmpCam);
+            }
+        });
+    }
+    // TEST MODE FUNCTIONS ---------------------------------------------------------------------------------
+    private void initializeTestMode(){
+        if (bmpTest == null) {
+            displaySize = new Point();
+            getWindowManager().getDefaultDisplay().getRealSize(displaySize);
+            Log.i(LOG_TAG, "Window display size: x=" + displaySize.x + ", y=" + displaySize.y);
+            bmpTest = Bitmap.createBitmap(displaySize.x, displaySize.y, Bitmap.Config.ARGB_8888);
+        }
+    }
+
+    public void shapeDetectedCallback(int[] descriptors){
+        if (!m_opened)
+        {
+            Log.d(LOG_TAG, "Device in Java not initialized");
+            return;
+        }
+
+    }
+
+    // depends on camera position, not a generic function TODO make generic
+    private Point convertCamPixel2ProPixel(float x, float y, float z){
+        if( x<0 || y<0 || z<=0){
+            return null;
+        }
+        if(displaySize == null || camRes == null){
+            return null;
+        }
+
+        //scale = sin(camFov/2) / sin(proFov/2)
+        double scale_x = 1.3074;
+        double scale_y = 1.8256;
+        double shifty = 486.69004 * Math.exp(-0.048035356*z);
+        double px = x * displaySize.x * scale_x / camRes.x  - displaySize.x*(scale_x -1) /2 ;  // shiftx nearly 0
+        double py = y * displaySize.y * scale_y / camRes.y  - displaySize.y*(scale_y -1)/2 - shifty;
+
+        if(px > displaySize.x || px < 0 || py>displaySize.y || py < 0){
+            Log.d(LOG_TAG, "Point is outside of the projector view");
+            return null;
+        }
+        return  new Point((int)px, (int)py );
+    }
+
+
 }
 
